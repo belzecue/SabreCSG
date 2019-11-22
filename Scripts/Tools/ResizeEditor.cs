@@ -1,7 +1,6 @@
 #if UNITY_EDITOR
 
 using UnityEngine;
-using System.Collections;
 using UnityEditor;
 using System.Linq;
 using System.Collections.Generic;
@@ -28,7 +27,11 @@ namespace Sabresaurus.SabreCSG
         private ResizeHandlePair? hoveredResizeHandlePair = null;
         private int hoveredResizePointIndex = -1; // -1 is unset, 0 is Point1, 1 is Point2
 
-        private Vector3 dotOffset3;
+        /// <summary>
+        /// The delta of the translation delta (damn right, delta delta!) when moving the brush selection
+        /// between the raw position and the position snapped to the current grid
+        /// </summary>
+        private Vector3 translationDeltaSnappingOffset;
 
         private float fullDeltaAngle = 0;
         private float unroundedDeltaAngle = 0;
@@ -69,6 +72,16 @@ namespace Sabresaurus.SabreCSG
         private Vector2 marqueeStart;
         private Vector2 marqueeEnd;
 
+        private bool inverseSnapSelectionToCurrentGridLogic = false;
+
+        private bool preventBrushSelection = false;
+        public override bool PreventBrushSelection 
+        {
+            get {
+                return preventBrushSelection;
+            }
+        }
+
         private ResizeHandlePair[] resizeHandlePairs = new ResizeHandlePair[]
         {
 			// Edge Mid Points
@@ -84,6 +97,18 @@ namespace Sabresaurus.SabreCSG
             new ResizeHandlePair(new Vector3(0,1,0)),
             new ResizeHandlePair(new Vector3(0,0,1)),
         };
+
+		private string[] brushModeSettings = new string[] {
+			"Add",
+			"Subtract",
+			"Volume",
+			"NoCSG"
+		};
+
+        Rect brushMenuRect;
+
+		public const int BRUSH_MENU_WIDTH = 130;
+		public const int BRUSH_MENU_HEIGHT = 132;
 
         public override void OnSceneGUI(SceneView sceneView, Event e)
         {
@@ -368,6 +393,18 @@ namespace Sabresaurus.SabreCSG
                 }
             }
 
+            if (KeyMappings.EventsMatch(e, Event.KeyboardEvent(KeyMappings.Instance.SnapSelectionToCurrentGrid)))
+            {
+                if (e.type == EventType.KeyDown)
+                {
+                    inverseSnapSelectionToCurrentGridLogic = true;
+                }
+                else
+                {
+                    inverseSnapSelectionToCurrentGridLogic = false;
+                }
+            }
+
             if (!CameraPanInProgress)
             {
                 // check for vertex snapping in translate mode.
@@ -411,6 +448,8 @@ namespace Sabresaurus.SabreCSG
 
         private void OnMouseMove(SceneView sceneView, Event e)
         {
+            preventBrushSelection = (primaryTargetBrush != null && EditorHelper.IsMousePositionInIMGUIRect(e.mousePosition, brushMenuRect));
+
             if (CameraPanInProgress || primaryTargetBrushBase == null || widgetMode != WidgetMode.Bounds)
             {
                 return;
@@ -599,7 +638,7 @@ namespace Sabresaurus.SabreCSG
                 else
                 {
                     // Resize
-                    dotOffset3 = Vector3.zero;
+                    translationDeltaSnappingOffset = Vector3.zero;
 
                     Vector2 mousePosition = e.mousePosition;
 
@@ -744,7 +783,8 @@ namespace Sabresaurus.SabreCSG
 
             marqueeStart = e.mousePosition;
 
-            if (EditorHelper.IsMousePositionInInvalidRects(e.mousePosition))
+            if (EditorHelper.IsMousePositionInInvalidRects(e.mousePosition) || 
+                (primaryTargetBrush != null && EditorHelper.IsMousePositionInIMGUIRect(e.mousePosition, brushMenuRect)))
             {
                 marqueeCancelled = true;
             }
@@ -803,14 +843,10 @@ namespace Sabresaurus.SabreCSG
             Ray lastRay = Camera.current.ScreenPointToRay(EditorHelper.ConvertMousePointPosition(lastPosition));
 
             Ray currentRay = Camera.current.ScreenPointToRay(EditorHelper.ConvertMousePointPosition(currentPosition));
-
-            //			Bounds bounds = GetBounds();
-
-            Vector3 offset = primaryTargetBrushTransform.position;
-            //			if(Tools.pivotMode == PivotMode.Center && Tools.pivotRotation == PivotRotation.Global)
-            //			{
-            //				offset = GetBounds().center;
-            //			}
+            Bounds bounds = GetBounds();
+            // we use the current AABBs center as offset. it's more correct than the primary brushes transform.
+            // especially when dealing with selections of multiple brushes
+            Vector3 offset = TransformPoint(bounds.center);
 
             Vector3 lineStart = offset + TransformDirection(selectedResizeHandlePair.Value.point1);
             Vector3 lineEnd = offset + TransformDirection(selectedResizeHandlePair.Value.point2);
@@ -833,53 +869,69 @@ namespace Sabresaurus.SabreCSG
             {
                 direction = -direction;
             }
-
+            
             Vector3 deltaWorld = (currentPositionWorld - lastPositionWorld);
             // Rescaling logic deals with local space changes, convert to that space
             Vector3 deltaLocal = InverseTransformDirection(deltaWorld);
 
-            Vector3 dot3 = Vector3.zero;
+            Vector3 translationDelta = Vector3.zero;
             if (direction.x != 0)
             {
-                dot3.x = Vector3.Dot(deltaLocal, new Vector3(Mathf.Sign(direction.x), 0, 0));
+                translationDelta.x = Vector3.Dot(deltaLocal, new Vector3(Mathf.Sign(direction.x), 0, 0));
             }
             if (direction.y != 0)
             {
-                dot3.y = Vector3.Dot(deltaLocal, new Vector3(0, Mathf.Sign(direction.y), 0));
+                translationDelta.y = Vector3.Dot(deltaLocal, new Vector3(0, Mathf.Sign(direction.y), 0));
             }
             if (direction.z != 0)
             {
-                dot3.z = Vector3.Dot(deltaLocal, new Vector3(0, 0, Mathf.Sign(direction.z)));
+                translationDelta.z = Vector3.Dot(deltaLocal, new Vector3(0, 0, Mathf.Sign(direction.z)));
             }
 
-            float snapDistance = CurrentSettings.PositionSnapDistance;
+//            float snapDistance = CurrentSettings.PositionSnapDistance;
 
             if (CurrentSettings.PositionSnappingEnabled)
             {
-                // Snapping's dot uses an offset to track deltas that would be lost otherwise due to snapping
-                dot3 += dotOffset3;
+                float snapDistance = CurrentSettings.PositionSnapDistance;
 
-                Vector3 roundedDot3 = MathHelper.RoundVector3(dot3, snapDistance);
-                dotOffset3 = dot3 - roundedDot3;
-                dot3 = roundedDot3;
+                Vector3 snapDistanceOffset = Vector3.zero;
+
+                if (CurrentSettings.AlwaysSnapToCurrentGrid != inverseSnapSelectionToCurrentGridLogic) {
+                    // find the point we're dragging - that's the bounding box side or corner, if you will.
+                    Vector3 offsetReferencePoint = offset + direction.Multiply(bounds.extents);
+                    // snap it to the global grid
+                    Vector3 snappedOffsetReferencePoint = MathHelper.RoundVector3(offsetReferencePoint, snapDistance);
+                    // get the delta between real and snap position. We gonna apply apply that to the snapped translation delta
+                    // to account for the fact that the face might be snapped to a smaller grid currently.
+                    // with this extra offset we will "re-snap" the face to the current grid
+                    snapDistanceOffset = offsetReferencePoint - snappedOffsetReferencePoint;
+                }
+                
+                // Snapping's dot uses an offset to track deltas that would be lost otherwise due to snapping
+                translationDelta += translationDeltaSnappingOffset;
+
+                Vector3 snappedTranslationDelta = MathHelper.RoundVector3(translationDelta, snapDistance);
+                translationDeltaSnappingOffset = translationDelta - snappedTranslationDelta;
+                snappedTranslationDelta -= snapDistanceOffset;
+                translationDelta = snappedTranslationDelta;
             }
 
             if (EnumHelper.IsFlagSet(e.modifiers, EventModifiers.Control))
             {
                 Undo.RecordObjects(targetBrushTransforms, "Move brush(es)");
-                dot3 = TransformDirection(dot3);
+                translationDelta = TransformDirection(translationDelta);
                 if (selectedResizePointIndex == 1)
                 {
-                    dot3 = -dot3;
+                    translationDelta = -translationDelta;
                 }
 
-                TranslateBrushes(dot3);
+                TranslateBrushes(translationDelta);
             }
             else
             {
                 if (GetIsValidToResize())
                 {
-                    RescaleBrush(direction, dot3);
+                    RescaleBrush(direction, translationDelta);
                 }
             }
         }
@@ -1247,16 +1299,183 @@ namespace Sabresaurus.SabreCSG
             style.normal.background = SabreCSGResources.ClearTexture;
             Rect rectangle = new Rect(0, 50, 300, 50);
             style.fixedHeight = rectangle.height;
+
+            brushMenuRect = new Rect(
+                0, 
+                (sceneView.position.height - Toolbar.bottomToolbarHeight) - BRUSH_MENU_HEIGHT, 
+                BRUSH_MENU_WIDTH,
+                BRUSH_MENU_HEIGHT
+            );
+
             GUILayout.Window(140007, rectangle, OnTopToolbarGUI, "", style);
+
+            if (primaryTargetBrush != null)
+            {
+                if (Toolbar.primitiveMenuShowing) {
+                    brushMenuRect.y -= Toolbar.PRIMITIVE_MENU_HEIGHT;
+                }
+                style = new GUIStyle(EditorStyles.toolbar);
+                style.fixedWidth = BRUSH_MENU_WIDTH;
+                style.fixedHeight = BRUSH_MENU_HEIGHT;
+                GUILayout.Window(140011, brushMenuRect, OnBrushSettingsGUI, "", style);
+            }
         }
 
         private void OnTopToolbarGUI(int windowID)
         {
             widgetMode = SabreGUILayout.DrawEnumGrid(widgetMode, GUILayout.Width(67));
+        }
 
-            GUILayout.BeginHorizontal(GUILayout.Width(200));
+        private void OnBrushSettingsGUI(int windowID) {
+			GUILayout.BeginHorizontal();
+			GUILayout.Label("Brush Settings", EditorStyles.boldLabel);
+			GUILayout.FlexibleSpace();
+			GUILayout.EndHorizontal();
+			GUILayout.BeginHorizontal();
 
-            if (GUILayout.Button("Snap Center", EditorStyles.miniButton))
+			EditorGUIUtility.labelWidth = 58f;
+
+			GUILayout.Label ("Mode", EditorStyles.label);
+
+			GUILayout.FlexibleSpace();
+
+			string currentBrushMode = "";
+
+			if (primaryTargetBrush.IsNoCSG) {
+				currentBrushMode = "NoCSG";
+			} else {
+				currentBrushMode = primaryTargetBrush.Mode.ToString();
+			}
+			int currentModeIndex = System.Array.IndexOf(brushModeSettings, currentBrushMode);
+
+			string brushMode = brushModeSettings[EditorGUILayout.Popup("", currentModeIndex, brushModeSettings, GUILayout.Width(60))]; 
+			if(brushMode != currentBrushMode)
+			{
+				bool anyChanged = false;
+
+				foreach (BrushBase brush in targetBrushBases) 
+				{
+					Undo.RecordObject(brush, "Change Brush To " + brushMode);
+
+					switch (brushMode) {
+						case "Add":
+							brush.Mode = CSGMode.Add;
+							brush.IsNoCSG = false;
+							break;
+						case "Subtract":
+							brush.Mode = CSGMode.Subtract;
+							brush.IsNoCSG = false;
+							break;
+						case "Volume":
+							brush.Mode = CSGMode.Volume;
+							brush.IsNoCSG = false;
+							break;
+						case "NoCSG":
+							// Volume overrides NoCSG, so it must be changed if you select NoCSG
+							if (brush.Mode == CSGMode.Volume) { 
+								brush.Mode = CSGMode.Add;
+							}
+							brush.IsNoCSG = true;
+							break;
+					}
+					anyChanged = true;
+				}
+				if(anyChanged)
+				{
+					// Need to update the icon for the csg mode in the hierarchy
+					EditorApplication.RepaintHierarchyWindow();
+
+					foreach (BrushBase b in targetBrushBases) 
+					{
+						b.Invalidate(true);
+					}
+				}
+			}
+
+			GUILayout.EndHorizontal();
+
+			bool[] collisionStates = targetBrushBases.Select(item => item.HasCollision).Distinct().ToArray();
+			bool hasCollision = (collisionStates.Length == 1) ? collisionStates[0] : false;
+
+			// TODO: If the brushes are all volumes, the collision and visible checkboxes should be disabled
+
+			// bool allVolumes = true;
+			// foreach (BrushBase brush in selectedBrushes) 
+			// {
+			// 	if (brush.Mode != CSGMode.Volume) {
+			// 		allVolumes = false;
+			// 	}
+			// }
+
+			bool newHasCollision = EditorGUILayout.Toggle("Collision", hasCollision);
+
+			if(newHasCollision != hasCollision)
+			{
+				foreach (BrushBase brush in targetBrushBases) 
+				{
+					Undo.RecordObject(brush, "Change Brush Collision Mode");
+					brush.HasCollision = newHasCollision;
+				}
+				// Tell the brushes that they have changed and need to recalc intersections
+				foreach (BrushBase brush in targetBrushBases) 
+				{
+					brush.Invalidate(true);
+				}
+			}
+
+			bool[] visibleStates = targetBrushBases.Select(item => item.IsVisible).Distinct().ToArray();
+			bool isVisible = (visibleStates.Length == 1) ? visibleStates[0] : false;
+
+			bool newIsVisible = EditorGUILayout.Toggle("Visible", isVisible);
+
+			if(newIsVisible != isVisible)
+			{
+				foreach (BrushBase brush in targetBrushBases) 
+				{
+					Undo.RecordObject(brush, "Change Brush Visible Mode");
+					brush.IsVisible = newIsVisible;
+				}
+				// Tell the brushes that they have changed and need to recalc intersections
+				foreach (BrushBase brush in targetBrushBases) 
+				{
+					brush.Invalidate(true);
+				}
+				if(newIsVisible == false)
+				{
+					csgModel.NotifyPolygonsRemoved();
+				}
+			}
+
+			GUILayout.BeginHorizontal();
+
+			GUILayout.Label("Flip", EditorStyles.label);
+			GUILayout.FlexibleSpace();
+
+			int flipIndex = -1;
+            if(GUILayout.Button("X", EditorStyles.miniButtonLeft, GUILayout.Width(20)))
+            {
+                flipIndex = 0;
+            }
+            if (GUILayout.Button("Y", EditorStyles.miniButtonMid, GUILayout.Width(20)))
+            {
+                flipIndex = 1;
+            }
+            if (GUILayout.Button("Z", EditorStyles.miniButtonRight, GUILayout.Width(20)))
+            {
+                flipIndex = 2;
+            }
+			
+			if (flipIndex != -1)
+            {	
+                Undo.RecordObjects(targetBrushBases.ToArray(), "Flip Polygons");
+
+                bool localToPrimaryBrush = (Tools.pivotRotation == PivotRotation.Local);
+                BrushUtility.Flip(primaryTargetBrush, targetBrushBases.ToArray(), flipIndex, localToPrimaryBrush, GetBrushesPivotPoint());
+            }
+
+			GUILayout.EndHorizontal();
+
+			if (GUILayout.Button("Snap Center", EditorStyles.miniButton))
             {
                 for (int i = 0; i < targetBrushBases.Length; i++)
                 {
@@ -1272,32 +1491,12 @@ namespace Sabresaurus.SabreCSG
                 }
             }
 
-            if (GUILayout.Button("Flip X", EditorStyles.miniButton))
-            {
-                Undo.RecordObjects(targetBrushes, "Flip Polygons");
+			GUILayout.BeginHorizontal();
+			GUILayout.FlexibleSpace();
+			GUILayout.Label(targetBrushBases.Length + " selected", EditorStyles.miniLabel);
+			GUILayout.EndHorizontal();
 
-                bool localToPrimaryBrush = (Tools.pivotRotation == PivotRotation.Local);
-                BrushUtility.Flip(primaryTargetBrush, targetBrushes, 0, localToPrimaryBrush, GetBrushesPivotPoint());
-            }
-
-            if (GUILayout.Button("Flip Y", EditorStyles.miniButton))
-            {
-                Undo.RecordObjects(targetBrushes, "Flip Polygons");
-
-                bool localToPrimaryBrush = (Tools.pivotRotation == PivotRotation.Local);
-                BrushUtility.Flip(primaryTargetBrush, targetBrushes, 1, localToPrimaryBrush, GetBrushesPivotPoint());
-            }
-
-            if (GUILayout.Button("Flip Z", EditorStyles.miniButton))
-            {
-                Undo.RecordObjects(targetBrushes, "Flip Polygons");
-
-                bool localToPrimaryBrush = (Tools.pivotRotation == PivotRotation.Local);
-                BrushUtility.Flip(primaryTargetBrush, targetBrushes, 2, localToPrimaryBrush, GetBrushesPivotPoint());
-            }
-
-            GUILayout.EndHorizontal();
-        }
+		}
 
         public void RescaleBrush(Vector3 direction, Vector3 translation)
         {

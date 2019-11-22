@@ -1036,13 +1036,16 @@ namespace Sabresaurus.SabreCSG
             for (int i = 0; i < Selection.gameObjects.Length; i++)
             {
                 // Skip any selected prefabs in the project window
-#if UNITY_2018_2
+#if UNITY_2018_2_OR_NEWER
 				if(PrefabUtility.GetCorrespondingObjectFromSource(Selection.gameObjects[i]) == null
 #else
                 if (PrefabUtility.GetPrefabParent(Selection.gameObjects[i]) == null
 #endif
+#if !UNITY_2018_3
 					&& PrefabUtility.GetPrefabObject(Selection.gameObjects[i].transform) != null)
-
+#else
+					&& PrefabUtility.GetPrefabInstanceHandle(Selection.gameObjects[i].transform) != null)
+#endif
 				{
 					continue;
 				}
@@ -1261,6 +1264,14 @@ namespace Sabresaurus.SabreCSG
                     {
                         Graphics.DrawTexture(drawRect, SabreCSGResources.SubtractIconTexture, iconMaterial);
                     }
+                }
+                else if(gameObject.HasComponent<CSGModel>())
+                {
+                    drawRect.xMax -= 2;
+                    drawRect.xMin = drawRect.xMax - 16;
+                    drawRect.height = 16;
+
+                    Graphics.DrawTexture(drawRect, SabreCSGResources.SabreCSG16IconTexture);
                 }
 
                 if (EditMode)

@@ -13,7 +13,7 @@ namespace Sabresaurus.SabreCSG
     {
         private const string RUNTIME_CSG_DEFINE = "RUNTIME_CSG";
         private const string SABRE_CSG_DEBUG_DEFINE = "SABRE_CSG_DEBUG";
-        private static readonly Vector2 WINDOW_SIZE = new Vector2(370, 400);
+        private static readonly Vector2 WINDOW_SIZE = new Vector2(370, 430);
 
         //private static Event cachedEvent;
 
@@ -35,7 +35,26 @@ namespace Sabresaurus.SabreCSG
             PreferencesGUI();
         }
 
+#if UNITY_2018_3_OR_NEWER
+        [SettingsProvider]
+        public static SettingsProvider PreferencesGUI_SP()
+        {
+            SettingsProvider provider = new SettingsProvider( "SabreCSG", SettingsScope.User )
+            {
+                label = "SabreCSG",
+                guiHandler = ( searchContext ) =>
+                {
+                    PreferencesGUI();
+                },
+
+                keywords = new HashSet<string>( new[] { "CSG", "SabreCSG", "Sabre" } )
+            };
+
+            return provider;
+        }
+#else
         [PreferenceItem("SabreCSG")]
+#endif
         public static void PreferencesGUI()
         {
             //			Event.current.GetTypeForControl
@@ -66,39 +85,23 @@ namespace Sabresaurus.SabreCSG
                 SceneView.RepaintAll();
                 CurrentSettings.HideGridInPerspective = newHideGridInPerspective;
             }
+            
+            CurrentSettings.AlwaysSnapToCurrentGrid = GUILayout.Toggle(CurrentSettings.AlwaysSnapToCurrentGrid, new GUIContent("Always snap to current grid size", "When position snapping is enabled, you can press " + KeyMappings.Instance.SnapSelectionToCurrentGrid + " to snap movement to the current grid size or tick this option to have it always on."));
 
             CurrentSettings.OverrideFlyCamera = GUILayout.Toggle(CurrentSettings.OverrideFlyCamera, "Linear fly camera");
 
-            EditorGUI.BeginChangeCheck();
-            CurrentSettings.ShowExcludedPolygons = GUILayout.Toggle(CurrentSettings.ShowExcludedPolygons, "Show excluded polygons");
-            if (EditorGUI.EndChangeCheck())
-            {
-                // What's shown in the SceneView has potentially changed, so force it to repaint
-                SceneView.RepaintAll();
+            EditorGUILayout.Space();
+            using (new SabreEditorGUI.IndentLevelScope()) {
+                EditorGUILayout.LabelField("Experimental Options", EditorStyles.boldLabel);
             }
+            EditorGUILayout.Space();
 
-            EditorGUI.BeginChangeCheck();
-            CurrentSettings.ShowBrushesAsWireframes = GUILayout.Toggle(CurrentSettings.ShowBrushesAsWireframes, "Show brushes as wireframes");
-            if (EditorGUI.EndChangeCheck())
-            {
-                // What's shown in the SceneView has potentially changed, so force it to repaint
-                CSGModel.UpdateAllBrushesVisibility();
-                SceneView.RepaintAll();
-            }
-
-            EditorGUI.BeginChangeCheck();
-            CurrentSettings.ShowBrushBoundsGuideLines = GUILayout.Toggle(CurrentSettings.ShowBrushBoundsGuideLines, "Show brush bounds guide lines");
-            if (EditorGUI.EndChangeCheck())
-            {
-                // What's shown in the SceneView has potentially changed, so force it to repaint
-                CSGModel.UpdateAllBrushesVisibility();
-                SceneView.RepaintAll();
-            }
+            CurrentSettings.VertexPaintToolEnabled = GUILayout.Toggle(CurrentSettings.VertexPaintToolEnabled, "Vertex paint tool");
 
             EditorGUILayout.Space();
-            EditorGUI.indentLevel = 1;
-            EditorGUILayout.LabelField("Developer Options", EditorStyles.boldLabel);
-            EditorGUI.indentLevel = 0;
+            using (new SabreEditorGUI.IndentLevelScope()) {
+                EditorGUILayout.LabelField("Developer Options", EditorStyles.boldLabel);
+            }
             EditorGUILayout.Space();
 
             EditorGUI.BeginChangeCheck();

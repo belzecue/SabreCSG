@@ -305,6 +305,11 @@ namespace Sabresaurus.SabreCSG
             }
         }
 
+        /// <summary>
+        /// Displays a list of enum buttons.
+        /// </summary>
+        /// <param name="value">The active value enum.</param>
+        /// <returns>The enum selected when the user clicks one of the buttons.</returns>
         public static T DrawEnumGrid<T>(T value, params GUILayoutOption[] options) where T : struct, IConvertible
         {
             if (!typeof(T).IsEnum)
@@ -337,6 +342,60 @@ namespace Sabresaurus.SabreCSG
                 bool isActive = (Convert.ToInt32(value) == i);
                 //				string displayName = StringHelper.ParseDisplayString(names[i]);
                 string displayName = names[i];
+                if (GUILayout.Toggle(isActive, displayName, activeStyle, options))
+                {
+                    value = (T)Enum.ToObject(typeof(T), i);
+                }
+            }
+
+            GUILayout.EndHorizontal();
+            return value;
+        }
+
+        /// <summary>
+        /// Displays a list of enum buttons, using only the provided enums.
+        /// </summary>
+        /// <param name="value">The active value enum.</param>
+        /// <param name="enabled">The visible enum values.</param>
+        /// <returns>The enum selected when the user clicks one of the buttons.</returns>
+        public static T DrawPartialEnumGrid<T>(T value, T[] enabled, params GUILayoutOption[] options) where T : struct, IConvertible
+        {
+            if (!typeof(T).IsEnum)
+            {
+                throw new ArgumentException("DrawEnumGrid must be passed an enum");
+            }
+            GUILayout.BeginHorizontal();
+
+            T[] enabledList = enabled;
+            T[] baseList = (T[]) Enum.GetValues(value.GetType());
+
+            for (int i = 0; i < baseList.Length; i++)
+            {
+                if (Array.IndexOf(enabledList, baseList[i]) == -1) {
+                    continue;
+                }
+
+                GUIStyle activeStyle;
+                if (baseList.Length == 1) // Only one button
+                {
+                    activeStyle = EditorStyles.miniButton;
+                }
+                else if (i == 0) // Left-most button
+                {
+                    activeStyle = EditorStyles.miniButtonLeft;
+                }
+                else if (i == baseList.Length - 1) // Right-most button
+                {
+                    activeStyle = EditorStyles.miniButtonRight;
+                }
+                else // Normal mid button
+                {
+                    activeStyle = EditorStyles.miniButtonMid;
+                }
+
+                bool isActive = (Convert.ToInt32(value) == i);
+                //				string displayName = StringHelper.ParseDisplayString(names[i]);
+                string displayName = baseList[i].ToString();
                 if (GUILayout.Toggle(isActive, displayName, activeStyle, options))
                 {
                     value = (T)Enum.ToObject(typeof(T), i);
@@ -550,6 +609,31 @@ namespace Sabresaurus.SabreCSG
 #else
             return EditorGUILayout.ColorField(label, value, showEyedropper, showAlpha, false, options);
 #endif
+        }
+
+        /// <summary>
+        /// Make a text field for entering even integers (e.g. when scrolled around it goes 2 4 6 8 10 or 16 14 12 10).
+        /// </summary>
+        /// <param name="label">Label to display in front of the int field.</param>
+        /// <param name="value">The value to edit.</param>
+        /// <param name="options">Optional GUIStyle.</param>
+        /// <returns>The value entered by the user.</returns>
+        public static int EvenIntField(GUIContent label, int value, params GUILayoutOption[] options)
+        {
+            int previousValue = value;
+            value = EditorGUILayout.IntField("Radius", value);
+            if (value < 2)
+            {
+                value = 2;
+            }
+            else
+            {
+                if (previousValue < value && (value % 2) != 0)
+                    value += 1;
+                else if (previousValue > value && (value % 2) != 0)
+                    value -= 1;
+            }
+            return value;
         }
     }
 }
